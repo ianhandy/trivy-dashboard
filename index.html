@@ -1,0 +1,1336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trivy Dashboard — Security Scan Visualizer</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg-deep: #241200;
+            --bg-mid: #1A0D00;
+            --bg-card: #2a1600;
+            --bg-card-hover: #331c00;
+            --gold: #DDC165;
+            --gold-light: #FFE9A3;
+            --orange: #E5591C;
+            --critical: #ff3b3b;
+            --high: #E5591C;
+            --medium: #DDC165;
+            --low: #6b9e6b;
+            --unknown: #888;
+            --text: #e8d8c4;
+            --text-muted: #a89478;
+            --border: rgba(221, 193, 101, 0.15);
+            --glow-gold: 0 0 20px rgba(221, 193, 101, 0.3);
+            --glow-orange: 0 0 20px rgba(229, 89, 28, 0.3);
+        }
+
+        body {
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+            background: var(--bg-deep);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        /* Subtle grid background */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(221, 193, 101, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(221, 193, 101, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; position: relative; z-index: 1; }
+
+        /* Header */
+        header {
+            text-align: center;
+            padding: 2rem 0 1rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2rem;
+        }
+
+        header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--gold), var(--orange));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: 0.05em;
+        }
+
+        header p { color: var(--text-muted); font-size: 0.85rem; margin-top: 0.5rem; }
+
+        /* Drop zone */
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: 12px;
+            padding: 4rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: var(--bg-mid);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .drop-zone::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at center, rgba(221, 193, 101, 0.05), transparent 70%);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--gold);
+            box-shadow: var(--glow-gold);
+        }
+
+        .drop-zone:hover::before, .drop-zone.dragover::before { opacity: 1; }
+
+        .drop-zone-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.6;
+        }
+
+        .drop-zone h2 {
+            color: var(--gold);
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .drop-zone p { color: var(--text-muted); font-size: 0.8rem; }
+
+        .drop-zone input[type="file"] { display: none; }
+
+        /* Paste area */
+        .paste-area {
+            margin-top: 1.5rem;
+            display: flex;
+            gap: 1rem;
+            align-items: stretch;
+        }
+
+        .paste-area textarea {
+            flex: 1;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.75rem;
+            padding: 1rem;
+            resize: vertical;
+            min-height: 120px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .paste-area textarea:focus { border-color: var(--gold); }
+        .paste-area textarea::placeholder { color: var(--text-muted); }
+
+        .btn {
+            background: linear-gradient(135deg, var(--orange), #c44a15);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 0.8rem 1.5rem;
+            font-family: inherit;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            letter-spacing: 0.03em;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--glow-orange);
+        }
+
+        .btn-secondary {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--gold);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--gold);
+            box-shadow: var(--glow-gold);
+        }
+
+        .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.75rem; }
+
+        /* Dashboard */
+        .dashboard { display: none; }
+        .dashboard.active { display: block; }
+        .input-section.hidden { display: none; }
+
+        /* Top bar */
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .scan-meta h2 {
+            font-size: 1.3rem;
+            color: var(--gold);
+        }
+
+        .scan-meta p { font-size: 0.75rem; color: var(--text-muted); }
+
+        .top-actions { display: flex; gap: 0.5rem; }
+
+        /* Severity cards */
+        .severity-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .severity-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.5rem;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .severity-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--gold);
+        }
+
+        .severity-card .count {
+            font-size: 2.5rem;
+            font-weight: 700;
+            line-height: 1;
+            margin-bottom: 0.5rem;
+        }
+
+        .severity-card .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+        }
+
+        .severity-card.critical { border-left: 3px solid var(--critical); }
+        .severity-card.critical .count { color: var(--critical); }
+        .severity-card.critical:hover { box-shadow: 0 0 20px rgba(255, 59, 59, 0.2); }
+
+        .severity-card.high { border-left: 3px solid var(--high); }
+        .severity-card.high .count { color: var(--high); }
+        .severity-card.high:hover { box-shadow: 0 0 20px rgba(229, 89, 28, 0.2); }
+
+        .severity-card.medium { border-left: 3px solid var(--medium); }
+        .severity-card.medium .count { color: var(--medium); }
+        .severity-card.medium:hover { box-shadow: 0 0 20px rgba(221, 193, 101, 0.2); }
+
+        .severity-card.low { border-left: 3px solid var(--low); }
+        .severity-card.low .count { color: var(--low); }
+        .severity-card.low:hover { box-shadow: 0 0 20px rgba(107, 158, 107, 0.2); }
+
+        .severity-card.unknown { border-left: 3px solid var(--unknown); }
+        .severity-card.unknown .count { color: var(--unknown); }
+
+        /* Severity bar chart */
+        .severity-bar {
+            display: flex;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 2rem;
+            background: var(--bg-card);
+        }
+
+        .severity-bar > div {
+            transition: width 0.6s ease;
+            min-width: 2px;
+        }
+
+        .severity-bar .bar-critical { background: var(--critical); }
+        .severity-bar .bar-high { background: var(--high); }
+        .severity-bar .bar-medium { background: var(--medium); }
+        .severity-bar .bar-low { background: var(--low); }
+        .severity-bar .bar-unknown { background: var(--unknown); }
+
+        /* Section headers */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 2rem 0 1rem;
+        }
+
+        .section-header h3 {
+            font-size: 1rem;
+            color: var(--gold);
+        }
+
+        /* Filter tabs */
+        .filter-tabs {
+            display: flex;
+            gap: 0.3rem;
+            flex-wrap: wrap;
+        }
+
+        .filter-tab {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 0.3rem 0.7rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-tab:hover, .filter-tab.active {
+            border-color: var(--gold);
+            color: var(--gold);
+            background: rgba(221, 193, 101, 0.1);
+        }
+
+        /* Search */
+        .search-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.8rem;
+            outline: none;
+            width: 280px;
+            transition: border-color 0.3s;
+        }
+
+        .search-box:focus { border-color: var(--gold); }
+
+        /* Vuln table */
+        .vuln-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-bottom: 2rem;
+        }
+
+        .vuln-table thead th {
+            background: var(--bg-mid);
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            padding: 0.8rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .vuln-table thead th:hover { color: var(--gold); }
+        .vuln-table thead th.sorted { color: var(--gold); }
+        .vuln-table thead th .sort-arrow { margin-left: 0.3rem; font-size: 0.6rem; }
+
+        .vuln-table tbody tr {
+            transition: background 0.2s;
+        }
+
+        .vuln-table tbody tr:hover { background: var(--bg-card-hover); }
+
+        .vuln-table td {
+            padding: 0.7rem 1rem;
+            font-size: 0.78rem;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+
+        .vuln-table td:first-child { font-weight: 600; }
+
+        /* Severity badge */
+        .sev-badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .sev-badge.critical { background: rgba(255, 59, 59, 0.2); color: var(--critical); }
+        .sev-badge.high { background: rgba(229, 89, 28, 0.2); color: var(--high); }
+        .sev-badge.medium { background: rgba(221, 193, 101, 0.2); color: var(--medium); }
+        .sev-badge.low { background: rgba(107, 158, 107, 0.2); color: var(--low); }
+        .sev-badge.unknown { background: rgba(136, 136, 136, 0.2); color: var(--unknown); }
+
+        /* CVE link */
+        .cve-link {
+            color: var(--gold);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .cve-link:hover { color: var(--gold-light); text-decoration: underline; }
+
+        /* Package groups */
+        .package-group {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            margin-bottom: 0.8rem;
+            overflow: hidden;
+            transition: border-color 0.3s;
+        }
+
+        .package-group:hover { border-color: rgba(221, 193, 101, 0.3); }
+
+        .package-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.2rem;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .package-header:hover { background: var(--bg-card-hover); }
+
+        .package-name {
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+
+        .package-version {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            margin-left: 0.5rem;
+        }
+
+        .package-badges { display: flex; gap: 0.3rem; }
+
+        .package-count-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-weight: 600;
+        }
+
+        .package-vulns {
+            display: none;
+            border-top: 1px solid var(--border);
+        }
+
+        .package-vulns.open { display: block; }
+
+        .package-vulns table { width: 100%; border-collapse: collapse; }
+
+        .package-vulns td {
+            padding: 0.5rem 1.2rem;
+            font-size: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .package-vulns tr:last-child td { border-bottom: none; }
+
+        /* Comparison section */
+        .compare-section {
+            margin-top: 2rem;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+
+        .compare-section h3 { color: var(--gold); margin-bottom: 1rem; font-size: 1rem; }
+
+        .compare-drop {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .compare-drop:hover { border-color: var(--gold); }
+
+        .compare-results {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .compare-card {
+            background: var(--bg-mid);
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+
+        .compare-card h4 { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .compare-card .val { font-size: 1.8rem; font-weight: 700; }
+        .compare-card .val.positive { color: var(--low); }
+        .compare-card .val.negative { color: var(--critical); }
+        .compare-card .val.neutral { color: var(--text-muted); }
+
+        .diff-list { margin-top: 1rem; }
+        .diff-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.4rem 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.75rem;
+        }
+
+        .diff-new { color: var(--critical); }
+        .diff-fixed { color: var(--low); }
+
+        /* Stats row */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+        }
+
+        .stat-card .stat-label {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .stat-card .stat-value {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--gold);
+            margin-top: 0.3rem;
+        }
+
+        /* View toggle */
+        .view-toggle { display: flex; gap: 0.3rem; }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: var(--bg-card);
+            border: 1px solid var(--gold);
+            border-radius: 8px;
+            padding: 0.8rem 1.2rem;
+            color: var(--gold);
+            font-size: 0.8rem;
+            box-shadow: var(--glow-gold);
+            z-index: 1000;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s ease;
+        }
+
+        .toast.show { transform: translateY(0); opacity: 1; }
+
+        /* Demo link */
+        .demo-link {
+            color: var(--orange);
+            cursor: pointer;
+            text-decoration: underline;
+            font-size: 0.8rem;
+        }
+
+        .demo-link:hover { color: var(--gold); }
+
+        /* Target column */
+        .target-tabs {
+            display: flex;
+            gap: 0.3rem;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
+
+        .target-tab {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .target-tab:hover, .target-tab.active {
+            border-color: var(--orange);
+            color: var(--orange);
+            background: rgba(229, 89, 28, 0.1);
+        }
+
+        /* CVSS score */
+        .cvss {
+            font-weight: 700;
+            font-size: 0.75rem;
+        }
+
+        .cvss.cvss-critical { color: var(--critical); }
+        .cvss.cvss-high { color: var(--high); }
+        .cvss.cvss-medium { color: var(--medium); }
+        .cvss.cvss-low { color: var(--low); }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .severity-grid { grid-template-columns: repeat(2, 1fr); }
+            .search-box { width: 100%; }
+            .section-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+            .compare-results { grid-template-columns: 1fr; }
+        }
+
+        /* Fade in animation */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .fade-in { animation: fadeInUp 0.5s ease forwards; }
+        .fade-in-delay-1 { animation-delay: 0.1s; opacity: 0; }
+        .fade-in-delay-2 { animation-delay: 0.2s; opacity: 0; }
+        .fade-in-delay-3 { animation-delay: 0.3s; opacity: 0; }
+        .fade-in-delay-4 { animation-delay: 0.4s; opacity: 0; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-deep); }
+        ::-webkit-scrollbar-thumb { background: rgba(221, 193, 101, 0.3); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(221, 193, 101, 0.5); }
+
+        /* Print styles for PDF export */
+        @media print {
+            body { background: #fff; color: #222; }
+            body::before { display: none; }
+            .top-actions, .compare-section, .paste-area, .input-section, .search-box, .filter-tabs, .view-toggle { display: none !important; }
+            .severity-card { border: 1px solid #ddd; }
+            .vuln-table thead th { background: #f5f5f5; }
+            .package-group { border: 1px solid #ddd; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>TRIVY DASHBOARD</h1>
+            <p>Drop a <code>trivy --format json</code> output to visualize security scan results</p>
+        </header>
+
+        <!-- Input section -->
+        <div class="input-section" id="inputSection">
+            <div class="drop-zone" id="dropZone">
+                <div class="drop-zone-icon">&#x1F6E1;</div>
+                <h2>Drop Trivy JSON Report</h2>
+                <p>or click to browse &middot; supports trivy v0.50+ JSON format</p>
+                <input type="file" id="fileInput" accept=".json">
+            </div>
+
+            <div class="paste-area">
+                <textarea id="jsonPaste" placeholder="Or paste trivy JSON output here..."></textarea>
+                <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                    <button class="btn" onclick="parsePasted()">Parse</button>
+                    <button class="btn btn-secondary btn-sm" onclick="loadDemo()">Load Demo</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard -->
+        <div class="dashboard" id="dashboard">
+            <div class="top-bar fade-in">
+                <div class="scan-meta">
+                    <h2 id="targetName">Scan Results</h2>
+                    <p id="scanMeta">—</p>
+                </div>
+                <div class="top-actions">
+                    <button class="btn btn-secondary btn-sm" onclick="exportHTML()">Export HTML</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window.print()">Print / PDF</button>
+                    <button class="btn btn-secondary btn-sm" onclick="resetDashboard()">New Scan</button>
+                </div>
+            </div>
+
+            <!-- Severity overview -->
+            <div class="severity-grid" id="severityGrid"></div>
+            <div class="severity-bar" id="severityBar"></div>
+
+            <!-- Stats -->
+            <div class="stats-row" id="statsRow"></div>
+
+            <!-- Target tabs (if multiple) -->
+            <div class="target-tabs" id="targetTabs"></div>
+
+            <!-- View toggle + Search + Filters -->
+            <div class="section-header">
+                <h3>Vulnerabilities</h3>
+                <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                    <div class="filter-tabs" id="severityFilters"></div>
+                    <input type="text" class="search-box" id="searchBox" placeholder="Search CVE, package, description...">
+                    <div class="view-toggle">
+                        <button class="filter-tab active" id="viewTable" onclick="setView('table')">Table</button>
+                        <button class="filter-tab" id="viewGroup" onclick="setView('group')">By Package</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Table view -->
+            <div id="tableView">
+                <table class="vuln-table">
+                    <thead>
+                        <tr>
+                            <th data-sort="VulnerabilityID" onclick="sortTable('VulnerabilityID')">CVE <span class="sort-arrow"></span></th>
+                            <th data-sort="Severity" onclick="sortTable('Severity')">Severity <span class="sort-arrow"></span></th>
+                            <th data-sort="PkgName" onclick="sortTable('PkgName')">Package <span class="sort-arrow"></span></th>
+                            <th>Installed</th>
+                            <th>Fixed</th>
+                            <th data-sort="CVSS" onclick="sortTable('CVSS')">CVSS <span class="sort-arrow"></span></th>
+                            <th>Title</th>
+                        </tr>
+                    </thead>
+                    <tbody id="vulnTableBody"></tbody>
+                </table>
+            </div>
+
+            <!-- Grouped view -->
+            <div id="groupView" style="display:none;">
+                <div id="packageGroups"></div>
+            </div>
+
+            <!-- Compare section -->
+            <div class="compare-section" id="compareSection">
+                <h3>Compare with Previous Scan</h3>
+                <div class="compare-drop" id="compareDrop" onclick="document.getElementById('compareInput').click()">
+                    <p style="color:var(--text-muted);font-size:0.8rem;">Drop or click to load a second Trivy JSON for diff comparison</p>
+                    <input type="file" id="compareInput" accept=".json" style="display:none">
+                </div>
+                <div id="compareResults" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+    // ===== State =====
+    let currentData = null;
+    let allVulns = [];
+    let currentFilter = 'ALL';
+    let currentSort = { key: 'Severity', dir: 'asc' };
+    let currentView = 'table';
+    let currentTargetIdx = -1; // -1 = all targets
+
+    const SEV_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, UNKNOWN: 4 };
+
+    // ===== File / Paste Handling =====
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        const file = e.dataTransfer.files[0];
+        if (file) readFile(file);
+    });
+
+    fileInput.addEventListener('change', e => {
+        if (e.target.files[0]) readFile(e.target.files[0]);
+    });
+
+    function readFile(file) {
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const data = JSON.parse(e.target.result);
+                processData(data);
+            } catch (err) {
+                showToast('Invalid JSON: ' + err.message);
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    function parsePasted() {
+        const raw = document.getElementById('jsonPaste').value.trim();
+        if (!raw) return showToast('Paste some JSON first');
+        try {
+            const data = JSON.parse(raw);
+            processData(data);
+        } catch (err) {
+            showToast('Invalid JSON: ' + err.message);
+        }
+    }
+
+    // ===== Data Processing =====
+    function processData(data) {
+        currentData = data;
+        allVulns = [];
+        currentTargetIdx = -1;
+
+        // Trivy JSON can be { Results: [...] } or an array directly
+        const results = data.Results || data.results || (Array.isArray(data) ? data : []);
+        if (!results.length && !data.Results) {
+            // Might be a single result object
+            if (data.Vulnerabilities || data.vulnerabilities) {
+                results.push(data);
+            }
+        }
+
+        results.forEach((result, rIdx) => {
+            const vulns = result.Vulnerabilities || result.vulnerabilities || [];
+            const targetName = result.Target || result.target || `Target ${rIdx + 1}`;
+            const targetType = result.Type || result.type || result.Class || result.class || '';
+
+            vulns.forEach(v => {
+                allVulns.push({
+                    VulnerabilityID: v.VulnerabilityID || v.vulnerabilityID || v.id || '—',
+                    Severity: (v.Severity || v.severity || 'UNKNOWN').toUpperCase(),
+                    PkgName: v.PkgName || v.pkgName || v.PkgIdentifier?.PURL || '—',
+                    InstalledVersion: v.InstalledVersion || v.installedVersion || '—',
+                    FixedVersion: v.FixedVersion || v.fixedVersion || '',
+                    Title: v.Title || v.title || v.Description || v.description || '',
+                    Description: v.Description || v.description || '',
+                    PrimaryURL: v.PrimaryURL || v.primaryURL || '',
+                    CVSS: extractCVSS(v),
+                    Target: targetName,
+                    TargetType: targetType,
+                    TargetIdx: rIdx
+                });
+            });
+        });
+
+        renderDashboard(results);
+    }
+
+    function extractCVSS(v) {
+        // Try multiple CVSS sources
+        if (v.CVSS) {
+            const sources = Object.values(v.CVSS);
+            for (const s of sources) {
+                if (s.V3Score) return s.V3Score;
+                if (s.V2Score) return s.V2Score;
+            }
+        }
+        if (v.cvss) return v.cvss;
+        return null;
+    }
+
+    // ===== Render =====
+    function renderDashboard(results) {
+        document.getElementById('inputSection').classList.add('hidden');
+        document.getElementById('dashboard').classList.add('active');
+
+        // Meta
+        const meta = currentData.Metadata || currentData.metadata || {};
+        const artifact = currentData.ArtifactName || currentData.artifactName || '';
+        const artifactType = currentData.ArtifactType || currentData.artifactType || '';
+
+        document.getElementById('targetName').textContent = artifact || 'Scan Results';
+        const parts = [];
+        if (artifactType) parts.push(artifactType);
+        parts.push(`${allVulns.length} vulnerabilities`);
+        parts.push(`${results.length} target${results.length !== 1 ? 's' : ''}`);
+        if (currentData.SchemaVersion) parts.push(`schema v${currentData.SchemaVersion}`);
+        if (currentData.CreatedAt) parts.push(new Date(currentData.CreatedAt).toLocaleString());
+        document.getElementById('scanMeta').textContent = parts.join(' · ');
+
+        renderSeverityCards();
+        renderSeverityBar();
+        renderStats(results);
+        renderTargetTabs(results);
+        renderFilters();
+        renderVulns();
+    }
+
+    function renderSeverityCards() {
+        const counts = countSeverities(getFilteredByTarget());
+        const grid = document.getElementById('severityGrid');
+        grid.innerHTML = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'].map((sev, i) =>
+            `<div class="severity-card ${sev.toLowerCase()} fade-in fade-in-delay-${i + 1}" onclick="filterBySeverity('${sev}')">
+                <div class="count">${counts[sev] || 0}</div>
+                <div class="label">${sev}</div>
+            </div>`
+        ).join('');
+    }
+
+    function renderSeverityBar() {
+        const counts = countSeverities(getFilteredByTarget());
+        const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
+        const bar = document.getElementById('severityBar');
+        bar.innerHTML = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'].map(sev => {
+            const pct = ((counts[sev] || 0) / total * 100);
+            return `<div class="bar-${sev.toLowerCase()}" style="width:${pct}%" title="${sev}: ${counts[sev] || 0}"></div>`;
+        }).join('');
+    }
+
+    function renderStats(results) {
+        const vulns = getFilteredByTarget();
+        const packages = new Set(vulns.map(v => v.PkgName));
+        const fixable = vulns.filter(v => v.FixedVersion).length;
+        const avgCVSS = vulns.filter(v => v.CVSS).reduce((acc, v) => acc + v.CVSS, 0) / (vulns.filter(v => v.CVSS).length || 1);
+
+        document.getElementById('statsRow').innerHTML = `
+            <div class="stat-card fade-in fade-in-delay-1">
+                <div class="stat-label">Total Vulnerabilities</div>
+                <div class="stat-value">${vulns.length}</div>
+            </div>
+            <div class="stat-card fade-in fade-in-delay-2">
+                <div class="stat-label">Affected Packages</div>
+                <div class="stat-value">${packages.size}</div>
+            </div>
+            <div class="stat-card fade-in fade-in-delay-3">
+                <div class="stat-label">Fixable</div>
+                <div class="stat-value">${fixable} <span style="font-size:0.7rem;color:var(--text-muted)">(${vulns.length ? Math.round(fixable / vulns.length * 100) : 0}%)</span></div>
+            </div>
+            <div class="stat-card fade-in fade-in-delay-4">
+                <div class="stat-label">Avg CVSS</div>
+                <div class="stat-value">${avgCVSS ? avgCVSS.toFixed(1) : '—'}</div>
+            </div>
+        `;
+    }
+
+    function renderTargetTabs(results) {
+        if (results.length <= 1) {
+            document.getElementById('targetTabs').innerHTML = '';
+            return;
+        }
+        const tabs = [`<button class="target-tab ${currentTargetIdx === -1 ? 'active' : ''}" onclick="setTarget(-1)">All (${allVulns.length})</button>`];
+        results.forEach((r, i) => {
+            const name = r.Target || r.target || `Target ${i + 1}`;
+            const count = allVulns.filter(v => v.TargetIdx === i).length;
+            tabs.push(`<button class="target-tab ${currentTargetIdx === i ? 'active' : ''}" onclick="setTarget(${i})">${escapeHtml(name)} (${count})</button>`);
+        });
+        document.getElementById('targetTabs').innerHTML = tabs.join('');
+    }
+
+    function renderFilters() {
+        const sevs = ['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
+        document.getElementById('severityFilters').innerHTML = sevs.map(s =>
+            `<button class="filter-tab ${currentFilter === s ? 'active' : ''}" onclick="filterBySeverity('${s}')">${s}</button>`
+        ).join('');
+    }
+
+    function renderVulns() {
+        const filtered = getFilteredVulns();
+
+        if (currentView === 'table') {
+            renderTable(filtered);
+        } else {
+            renderGroups(filtered);
+        }
+    }
+
+    function getFilteredByTarget() {
+        if (currentTargetIdx === -1) return allVulns;
+        return allVulns.filter(v => v.TargetIdx === currentTargetIdx);
+    }
+
+    function getFilteredVulns() {
+        let vulns = getFilteredByTarget();
+        const search = document.getElementById('searchBox').value.toLowerCase();
+
+        if (currentFilter !== 'ALL') {
+            vulns = vulns.filter(v => v.Severity === currentFilter);
+        }
+
+        if (search) {
+            vulns = vulns.filter(v =>
+                v.VulnerabilityID.toLowerCase().includes(search) ||
+                v.PkgName.toLowerCase().includes(search) ||
+                v.Title.toLowerCase().includes(search) ||
+                v.Description.toLowerCase().includes(search)
+            );
+        }
+
+        // Sort
+        vulns.sort((a, b) => {
+            let va, vb;
+            if (currentSort.key === 'Severity') {
+                va = SEV_ORDER[a.Severity] ?? 5;
+                vb = SEV_ORDER[b.Severity] ?? 5;
+            } else if (currentSort.key === 'CVSS') {
+                va = a.CVSS || 0;
+                vb = b.CVSS || 0;
+            } else {
+                va = (a[currentSort.key] || '').toLowerCase();
+                vb = (b[currentSort.key] || '').toLowerCase();
+            }
+            if (va < vb) return currentSort.dir === 'asc' ? -1 : 1;
+            if (va > vb) return currentSort.dir === 'asc' ? 1 : -1;
+            return 0;
+        });
+
+        return vulns;
+    }
+
+    function renderTable(vulns) {
+        const tbody = document.getElementById('vulnTableBody');
+        if (!vulns.length) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:2rem;">No vulnerabilities match the current filters</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = vulns.map(v => `
+            <tr>
+                <td>${v.PrimaryURL ? `<a class="cve-link" href="${escapeHtml(v.PrimaryURL)}" target="_blank" rel="noopener">${escapeHtml(v.VulnerabilityID)}</a>` : escapeHtml(v.VulnerabilityID)}</td>
+                <td><span class="sev-badge ${v.Severity.toLowerCase()}">${v.Severity}</span></td>
+                <td>${escapeHtml(v.PkgName)}</td>
+                <td style="color:var(--text-muted)">${escapeHtml(v.InstalledVersion)}</td>
+                <td style="color:${v.FixedVersion ? 'var(--low)' : 'var(--text-muted)'}">${v.FixedVersion ? escapeHtml(v.FixedVersion) : '—'}</td>
+                <td>${v.CVSS ? `<span class="cvss ${cvssClass(v.CVSS)}">${v.CVSS.toFixed(1)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
+                <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(v.Title)}">${escapeHtml(v.Title)}</td>
+            </tr>
+        `).join('');
+    }
+
+    function renderGroups(vulns) {
+        const groups = {};
+        vulns.forEach(v => {
+            const key = `${v.PkgName}@${v.InstalledVersion}`;
+            if (!groups[key]) groups[key] = { name: v.PkgName, version: v.InstalledVersion, vulns: [] };
+            groups[key].vulns.push(v);
+        });
+
+        const sorted = Object.values(groups).sort((a, b) => {
+            const aMax = Math.min(...a.vulns.map(v => SEV_ORDER[v.Severity] ?? 5));
+            const bMax = Math.min(...b.vulns.map(v => SEV_ORDER[v.Severity] ?? 5));
+            return aMax - bMax || b.vulns.length - a.vulns.length;
+        });
+
+        const container = document.getElementById('packageGroups');
+        if (!sorted.length) {
+            container.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:2rem;">No packages match</p>';
+            return;
+        }
+
+        container.innerHTML = sorted.map((g, i) => {
+            const counts = countSeverities(g.vulns);
+            const badges = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].filter(s => counts[s])
+                .map(s => `<span class="package-count-badge sev-badge ${s.toLowerCase()}">${counts[s]} ${s[0]}</span>`).join('');
+
+            return `
+                <div class="package-group">
+                    <div class="package-header" onclick="this.nextElementSibling.classList.toggle('open')">
+                        <div>
+                            <span class="package-name">${escapeHtml(g.name)}</span>
+                            <span class="package-version">${escapeHtml(g.version)}</span>
+                        </div>
+                        <div class="package-badges">${badges}</div>
+                    </div>
+                    <div class="package-vulns">
+                        <table>${g.vulns.map(v => `
+                            <tr>
+                                <td style="width:160px">${v.PrimaryURL ? `<a class="cve-link" href="${escapeHtml(v.PrimaryURL)}" target="_blank" rel="noopener">${escapeHtml(v.VulnerabilityID)}</a>` : escapeHtml(v.VulnerabilityID)}</td>
+                                <td style="width:80px"><span class="sev-badge ${v.Severity.toLowerCase()}">${v.Severity}</span></td>
+                                <td style="width:60px">${v.CVSS ? `<span class="cvss ${cvssClass(v.CVSS)}">${v.CVSS.toFixed(1)}</span>` : '—'}</td>
+                                <td style="color:${v.FixedVersion ? 'var(--low)' : 'var(--text-muted)'}">${v.FixedVersion ? '→ ' + escapeHtml(v.FixedVersion) : 'no fix'}</td>
+                                <td style="color:var(--text-muted)">${escapeHtml(v.Title).substring(0, 100)}</td>
+                            </tr>
+                        `).join('')}</table>
+                    </div>
+                </div>`;
+        }).join('');
+    }
+
+    // ===== Interactions =====
+    function filterBySeverity(sev) {
+        currentFilter = sev;
+        renderFilters();
+        renderVulns();
+    }
+
+    function sortTable(key) {
+        if (currentSort.key === key) {
+            currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+            currentSort = { key, dir: 'asc' };
+        }
+        // Update sort arrows
+        document.querySelectorAll('.vuln-table th').forEach(th => {
+            th.classList.remove('sorted');
+            th.querySelector('.sort-arrow').textContent = '';
+        });
+        const th = document.querySelector(`th[data-sort="${key}"]`);
+        if (th) {
+            th.classList.add('sorted');
+            th.querySelector('.sort-arrow').textContent = currentSort.dir === 'asc' ? '▲' : '▼';
+        }
+        renderVulns();
+    }
+
+    function setView(view) {
+        currentView = view;
+        document.getElementById('viewTable').classList.toggle('active', view === 'table');
+        document.getElementById('viewGroup').classList.toggle('active', view === 'group');
+        document.getElementById('tableView').style.display = view === 'table' ? 'block' : 'none';
+        document.getElementById('groupView').style.display = view === 'group' ? 'block' : 'none';
+        renderVulns();
+    }
+
+    function setTarget(idx) {
+        currentTargetIdx = idx;
+        const results = currentData.Results || currentData.results || [];
+        renderSeverityCards();
+        renderSeverityBar();
+        renderStats(results);
+        renderTargetTabs(results);
+        renderVulns();
+    }
+
+    document.getElementById('searchBox').addEventListener('input', () => renderVulns());
+
+    // ===== Compare =====
+    const compareInput = document.getElementById('compareInput');
+    const compareDrop = document.getElementById('compareDrop');
+
+    compareDrop.addEventListener('dragover', e => { e.preventDefault(); compareDrop.style.borderColor = 'var(--gold)'; });
+    compareDrop.addEventListener('dragleave', () => { compareDrop.style.borderColor = ''; });
+    compareDrop.addEventListener('drop', e => {
+        e.preventDefault();
+        compareDrop.style.borderColor = '';
+        if (e.dataTransfer.files[0]) {
+            const reader = new FileReader();
+            reader.onload = ev => {
+                try {
+                    const data = JSON.parse(ev.target.result);
+                    runComparison(data);
+                } catch (err) { showToast('Invalid comparison JSON'); }
+            };
+            reader.readAsText(e.dataTransfer.files[0]);
+        }
+    });
+
+    compareInput.addEventListener('change', e => {
+        if (e.target.files[0]) {
+            const reader = new FileReader();
+            reader.onload = ev => {
+                try {
+                    const data = JSON.parse(ev.target.result);
+                    runComparison(data);
+                } catch (err) { showToast('Invalid comparison JSON'); }
+            };
+            reader.readAsText(e.target.files[0]);
+        }
+    });
+
+    function runComparison(oldData) {
+        const oldVulns = new Set();
+        const oldResults = oldData.Results || oldData.results || (Array.isArray(oldData) ? oldData : []);
+        oldResults.forEach(r => {
+            (r.Vulnerabilities || r.vulnerabilities || []).forEach(v => {
+                oldVulns.add(v.VulnerabilityID || v.vulnerabilityID || v.id);
+            });
+        });
+
+        const currentVulnIDs = new Set(allVulns.map(v => v.VulnerabilityID));
+
+        const newVulns = allVulns.filter(v => !oldVulns.has(v.VulnerabilityID));
+        const fixedVulns = [...oldVulns].filter(id => !currentVulnIDs.has(id));
+        const delta = allVulns.length - oldVulns.size;
+
+        compareDrop.style.display = 'none';
+        const resultsDiv = document.getElementById('compareResults');
+        resultsDiv.style.display = 'block';
+
+        resultsDiv.innerHTML = `
+            <div class="compare-results">
+                <div class="compare-card">
+                    <h4>New Vulnerabilities</h4>
+                    <div class="val negative">+${newVulns.length}</div>
+                </div>
+                <div class="compare-card">
+                    <h4>Fixed</h4>
+                    <div class="val positive">-${fixedVulns.length}</div>
+                </div>
+                <div class="compare-card">
+                    <h4>Net Change</h4>
+                    <div class="val ${delta > 0 ? 'negative' : delta < 0 ? 'positive' : 'neutral'}">${delta > 0 ? '+' : ''}${delta}</div>
+                </div>
+            </div>
+            ${newVulns.length ? `
+                <div class="diff-list">
+                    <h4 style="color:var(--text-muted);font-size:0.75rem;margin:1rem 0 0.5rem;">New in this scan:</h4>
+                    ${newVulns.slice(0, 20).map(v => `
+                        <div class="diff-item">
+                            <span class="diff-new">${escapeHtml(v.VulnerabilityID)}</span>
+                            <span><span class="sev-badge ${v.Severity.toLowerCase()}">${v.Severity}</span></span>
+                            <span style="color:var(--text-muted)">${escapeHtml(v.PkgName)}</span>
+                        </div>
+                    `).join('')}
+                    ${newVulns.length > 20 ? `<p style="color:var(--text-muted);font-size:0.7rem;padding:0.5rem 0">...and ${newVulns.length - 20} more</p>` : ''}
+                </div>
+            ` : ''}
+            ${fixedVulns.length ? `
+                <div class="diff-list">
+                    <h4 style="color:var(--text-muted);font-size:0.75rem;margin:1rem 0 0.5rem;">Fixed since last scan:</h4>
+                    ${fixedVulns.slice(0, 20).map(id => `
+                        <div class="diff-item">
+                            <span class="diff-fixed">${escapeHtml(id)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
+        `;
+    }
+
+    // ===== Export =====
+    function exportHTML() {
+        const clone = document.documentElement.cloneNode(true);
+        // Remove input section and scripts
+        const inputSec = clone.querySelector('#inputSection');
+        if (inputSec) inputSec.remove();
+        const scripts = clone.querySelectorAll('script');
+        scripts.forEach(s => s.remove());
+        // Remove compare drop
+        const cmpDrop = clone.querySelector('#compareDrop');
+        if (cmpDrop) cmpDrop.remove();
+        const cmpInput = clone.querySelector('#compareInput');
+        if (cmpInput) cmpInput.remove();
+        // Remove top-actions
+        const topActions = clone.querySelector('.top-actions');
+        if (topActions) topActions.remove();
+
+        // Expand all package groups
+        clone.querySelectorAll('.package-vulns').forEach(el => el.classList.add('open'));
+
+        const html = '<!DOCTYPE html>\n' + clone.outerHTML;
+        const blob = new Blob([html], { type: 'text/html' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        const name = (currentData.ArtifactName || 'trivy-report').replace(/[^a-zA-Z0-9-_.]/g, '_');
+        a.download = `trivy-report-${name}-${new Date().toISOString().slice(0, 10)}.html`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        showToast('Report exported as HTML');
+    }
+
+    function resetDashboard() {
+        document.getElementById('inputSection').classList.remove('hidden');
+        document.getElementById('dashboard').classList.remove('active');
+        document.getElementById('jsonPaste').value = '';
+        document.getElementById('compareResults').style.display = 'none';
+        document.getElementById('compareDrop').style.display = '';
+        currentData = null;
+        allVulns = [];
+        currentFilter = 'ALL';
+        currentTargetIdx = -1;
+    }
+
+    // ===== Helpers =====
+    function countSeverities(vulns) {
+        const counts = {};
+        vulns.forEach(v => { counts[v.Severity] = (counts[v.Severity] || 0) + 1; });
+        return counts;
+    }
+
+    function cvssClass(score) {
+        if (score >= 9) return 'cvss-critical';
+        if (score >= 7) return 'cvss-high';
+        if (score >= 4) return 'cvss-medium';
+        return 'cvss-low';
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function showToast(msg) {
+        const toast = document.getElementById('toast');
+        toast.textContent = msg;
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    // ===== Demo Data =====
+    function loadDemo() {
+        const demo = {
+            SchemaVersion: 2,
+            CreatedAt: new Date().toISOString(),
+            ArtifactName: "myapp:latest",
+            ArtifactType: "container_image",
+            Results: [
+                {
+                    Target: "myapp:latest (debian 12.4)",
+                    Class: "os-pkgs",
+                    Type: "debian",
+                    Vulnerabilities: [
+                        { VulnerabilityID: "CVE-2024-21626", Severity: "CRITICAL", PkgName: "runc", InstalledVersion: "1.1.10", FixedVersion: "1.1.12", Title: "runc: file descriptor leak allows container breakout", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2024-21626", CVSS: { nvd: { V3Score: 8.6 } } },
+                        { VulnerabilityID: "CVE-2023-44487", Severity: "HIGH", PkgName: "nghttp2", InstalledVersion: "1.52.0-1", FixedVersion: "1.52.0-1+deb12u1", Title: "HTTP/2 Rapid Reset Attack", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-44487", CVSS: { nvd: { V3Score: 7.5 } } },
+                        { VulnerabilityID: "CVE-2023-4911", Severity: "CRITICAL", PkgName: "libc6", InstalledVersion: "2.36-9+deb12u3", FixedVersion: "2.36-9+deb12u4", Title: "glibc: buffer overflow in ld.so leading to privilege escalation", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-4911", CVSS: { nvd: { V3Score: 7.8 } } },
+                        { VulnerabilityID: "CVE-2023-5678", Severity: "MEDIUM", PkgName: "openssl", InstalledVersion: "3.0.11-1~deb12u2", FixedVersion: "3.0.13-1~deb12u1", Title: "openssl: Excessive time spent checking DH keys and parameters", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-5678", CVSS: { nvd: { V3Score: 5.3 } } },
+                        { VulnerabilityID: "CVE-2023-5363", Severity: "HIGH", PkgName: "openssl", InstalledVersion: "3.0.11-1~deb12u2", FixedVersion: "3.0.13-1~deb12u1", Title: "openssl: Incorrect cipher key & IV length processing", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-5363", CVSS: { nvd: { V3Score: 7.5 } } },
+                        { VulnerabilityID: "CVE-2023-6246", Severity: "HIGH", PkgName: "libc6", InstalledVersion: "2.36-9+deb12u3", FixedVersion: "2.36-9+deb12u4", Title: "glibc: Heap-based buffer overflow in __vsyslog_internal()", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-6246", CVSS: { nvd: { V3Score: 7.8 } } },
+                        { VulnerabilityID: "CVE-2023-39326", Severity: "MEDIUM", PkgName: "stdlib", InstalledVersion: "1.21.5", FixedVersion: "1.21.6", Title: "golang: net/http: limit chunked data overhead", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-39326", CVSS: { nvd: { V3Score: 5.3 } } },
+                        { VulnerabilityID: "CVE-2024-0567", Severity: "HIGH", PkgName: "libgnutls30", InstalledVersion: "3.7.9-2+deb12u1", FixedVersion: "3.7.9-2+deb12u2", Title: "gnutls: timing side-channel in the RSA-PSK authentication", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2024-0567", CVSS: { nvd: { V3Score: 7.5 } } },
+                        { VulnerabilityID: "CVE-2023-50495", Severity: "LOW", PkgName: "libncursesw6", InstalledVersion: "6.4-4", FixedVersion: "", Title: "ncurses: segmentation fault via _nc_wrap_entry()", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-50495", CVSS: { nvd: { V3Score: 3.3 } } },
+                        { VulnerabilityID: "CVE-2023-7008", Severity: "LOW", PkgName: "systemd", InstalledVersion: "252.19-1~deb12u1", FixedVersion: "", Title: "systemd-resolved: Unsigned name response in signed zone is not refused", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-7008", CVSS: { nvd: { V3Score: 5.9 } } },
+                        { VulnerabilityID: "CVE-2024-0553", Severity: "HIGH", PkgName: "libgnutls30", InstalledVersion: "3.7.9-2+deb12u1", FixedVersion: "3.7.9-2+deb12u2", Title: "gnutls: incomplete fix for CVE-2023-5981", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2024-0553", CVSS: { nvd: { V3Score: 7.5 } } },
+                        { VulnerabilityID: "CVE-2023-36054", Severity: "MEDIUM", PkgName: "krb5", InstalledVersion: "1.20.1-2+deb12u1", FixedVersion: "", Title: "krb5: Denial of service through freeing uninitialized pointer", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-36054", CVSS: { nvd: { V3Score: 6.5 } } }
+                    ]
+                },
+                {
+                    Target: "app/go.sum",
+                    Class: "lang-pkgs",
+                    Type: "gomod",
+                    Vulnerabilities: [
+                        { VulnerabilityID: "CVE-2023-45283", Severity: "HIGH", PkgName: "golang.org/x/net", InstalledVersion: "v0.17.0", FixedVersion: "v0.19.0", Title: "golang.org/x/net: rapid memory exhaustion", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-45283", CVSS: { nvd: { V3Score: 7.5 } } },
+                        { VulnerabilityID: "CVE-2023-48795", Severity: "MEDIUM", PkgName: "golang.org/x/crypto", InstalledVersion: "v0.14.0", FixedVersion: "v0.17.0", Title: "ssh: Prefix truncation attack on Binary Packet Protocol (Terrapin attack)", PrimaryURL: "https://avd.aquasec.com/nvd/cve-2023-48795", CVSS: { nvd: { V3Score: 5.9 } } }
+                    ]
+                }
+            ]
+        };
+
+        processData(demo);
+        showToast('Demo data loaded — 14 vulnerabilities across 2 targets');
+    }
+    </script>
+</body>
+</html>
